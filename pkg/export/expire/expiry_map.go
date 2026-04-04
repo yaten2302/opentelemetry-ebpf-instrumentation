@@ -67,6 +67,37 @@ func (ex *ExpiryMap[T]) GetOrCreate(lbls []string, instancer func() T) T {
 	return instance
 }
 
+// GetOrCreateWithError is like GetOrCreate but supports an instancer that may fail.
+func (ex *ExpiryMap[T]) GetOrCreateWithError(lbls []string, instancer func() (T, error)) (T, error) {
+	now := ex.clock()
+
+	h := labelsKey(lbls)
+	ex.mt.RLock()
+	e, ok := ex.entries[h]
+	ex.mt.RUnlock()
+	if ok {
+		ex.mt.Lock()
+		e.lastAccess = now
+		ex.mt.Unlock()
+		return e.val, nil
+	}
+
+	ex.mt.Lock()
+	instance, err := instancer()
+	if err != nil {
+		ex.mt.Unlock()
+		var zero T
+		return zero, err
+	}
+	ex.entries[h] = &entry[T]{
+		labelValues: lbls,
+		lastAccess:  now,
+		val:         instance,
+	}
+	ex.mt.Unlock()
+	return instance, nil
+}
+
 // DeleteExpired entries and return their label set
 func (ex *ExpiryMap[T]) DeleteExpired() []T {
 	// If TTL is 0, disable expiration completely

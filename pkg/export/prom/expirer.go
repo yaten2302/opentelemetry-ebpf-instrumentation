@@ -40,19 +40,17 @@ func NewExpirer[T prometheus.Metric](wrapped *prometheus.MetricVec, clock func()
 // values (same order as the variable labels in Desc). If that combination of
 // label values is accessed for the first time, a new Counter is created.
 // If not, a cached copy is returned and the "last access" cache time is updated.
-func (ex *Expirer[T]) WithLabelValues(lbls ...string) *MetricEntry[T] {
-	return ex.entries.GetOrCreate(lbls, func() *MetricEntry[T] {
+func (ex *Expirer[T]) WithLabelValues(lbls ...string) (*MetricEntry[T], error) {
+	return ex.entries.GetOrCreateWithError(lbls, func() (*MetricEntry[T], error) {
 		plog().With("labelValues", lbls).Debug("storing new metric label set")
 		c, err := ex.wrapped.GetMetricWithLabelValues(lbls...)
-		// same behavior as specific WithLabelValues implementations
-		// no need to return the error
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		return &MetricEntry[T]{
 			Metric:    c.(T),
 			LabelVals: lbls,
-		}
+		}, nil
 	})
 }
 

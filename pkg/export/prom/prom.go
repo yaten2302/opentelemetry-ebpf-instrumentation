@@ -981,9 +981,19 @@ func (r *metricsReporter) observe(span *request.Span) {
 		return
 	}
 	t := span.Timings()
-	r.obiInfo.WithLabelValues(span.Service.SDKLanguage.String()).Metric.Set(1.0)
+	obiInfo, err := r.obiInfo.WithLabelValues(span.Service.SDKLanguage.String())
+	if err != nil {
+		slog.With("component", "prom.MetricsReporter").With("error", err).Error("failed to get obi info metric by label values")
+		return
+	}
+	obiInfo.Metric.Set(1.0)
 	if span.Service.Features.AppHost() {
-		r.tracesHostInfo.WithLabelValues(r.nodeMeta.HostID).Metric.Set(1.0)
+		tracesHost, err := r.tracesHostInfo.WithLabelValues(r.nodeMeta.HostID)
+		if err != nil {
+			slog.With("component", "prom.MetricsReporter").With("error", err).Error("failed to get traces host info metric by label values")
+			return
+		}
+		tracesHost.Metric.Set(1.0)
 	}
 	duration := t.End.Sub(t.RequestStart).Seconds()
 
@@ -991,77 +1001,125 @@ func (r *metricsReporter) observe(span *request.Span) {
 		switch span.Type {
 		case request.EventTypeHTTP:
 			if r.is.HTTPEnabled() {
-				r.observeHistogram(r.httpDuration.WithLabelValues(labelValues(span, r.attrHTTPDuration)...).Metric, duration, span)
-				r.observeHistogram(r.httpRequestSize.WithLabelValues(labelValues(span, r.attrHTTPRequestSize)...).Metric, float64(span.RequestBodyLength()), span)
-				r.observeHistogram(r.httpResponseSize.WithLabelValues(labelValues(span, r.attrHTTPResponseSize)...).Metric, float64(span.ResponseBodyLength()), span)
+				 if m, ok := getHistogram(r.httpDuration, labelValues(span, r.attrHTTPDuration), "http_duration"); ok {
+					r.observeHistogram(m, duration, span)
+				}
+				if m, ok := getHistogram(r.httpRequestSize, labelValues(span, r.attrHTTPRequestSize), "http_request_size"); ok {
+					r.observeHistogram(m, float64(span.RequestBodyLength()), span)
+				}
+				if m, ok := getHistogram(r.httpResponseSize, labelValues(span, r.attrHTTPResponseSize), "http_response_size"); ok {
+					r.observeHistogram(m, float64(span.ResponseBodyLength()), span)
+				}
 			}
 		case request.EventTypeHTTPClient:
 			// HTTP client subtypes that are database calls get recorded as db client metrics
 			switch {
 			case r.is.DBEnabled() && (span.SubType == request.HTTPSubtypeSQLPP || span.SubType == request.HTTPSubtypeElasticsearch):
-				r.observeHistogram(r.dbClientDuration.WithLabelValues(labelValues(span, r.attrDBClientDuration)...).Metric, duration, span)
+				if m, ok := getHistogram(r.dbClientDuration, labelValues(span, r.attrDBClientDuration), "db_client_duration"); ok {
+					r.observeHistogram(m, duration, span)
+				}
 			case r.is.GenAIEnabled() && (span.SubType == request.HTTPSubtypeAnthropic || span.SubType == request.HTTPSubtypeOpenAI):
-				r.observeHistogram(r.genAIClientDuration.WithLabelValues(labelValues(span, r.attrGenAIClientDuration)...).Metric, duration, span)
-				r.observeHistogram(r.genAITokenUsage.WithLabelValues(labelValues(span, r.attrGenAIInputTokenUsage)...).Metric, float64(span.GenAIInputTokens()), span)
-				r.observeHistogram(r.genAITokenUsage.WithLabelValues(labelValues(span, r.attrGenAIOutputTokenUsage)...).Metric, float64(span.GenAIOutputTokens()), span)
+				if m, ok := getHistogram(r.genAIClientDuration, labelValues(span, r.attrGenAIClientDuration), "genai_client_duration"); ok {
+					r.observeHistogram(m, duration, span)
+				}
+				if m, ok := getHistogram(r.genAITokenUsage, labelValues(span, r.attrGenAIInputTokenUsage), "genai_token_input_usage"); ok {
+					r.observeHistogram(m, float64(span.GenAIInputTokens()), span)
+				}
+				if m, ok := getHistogram(r.genAITokenUsage, labelValues(span, r.attrGenAIOutputTokenUsage), "genai_token_output_usage"); ok {
+					r.observeHistogram(m, float64(span.GenAIOutputTokens()), span)
+				}
 			default:
 				if r.is.HTTPEnabled() {
-					r.observeHistogram(r.httpClientDuration.WithLabelValues(labelValues(span, r.attrHTTPClientDuration)...).Metric, duration, span)
-					r.observeHistogram(r.httpClientRequestSize.WithLabelValues(labelValues(span, r.attrHTTPClientRequestSize)...).Metric, float64(span.RequestBodyLength()), span)
-					r.observeHistogram(r.httpClientResponseSize.WithLabelValues(labelValues(span, r.attrHTTPClientResponseSize)...).Metric, float64(span.ResponseBodyLength()), span)
+					if m, ok := getHistogram(r.httpClientDuration, labelValues(span, r.attrHTTPClientDuration), "http_client_duration"); ok {
+						r.observeHistogram(m, duration, span)
+					}
+					if m, ok := getHistogram(r.httpClientRequestSize, labelValues(span, r.attrHTTPClientRequestSize), "http_client_request_size"); ok {
+						r.observeHistogram(m, float64(span.RequestBodyLength()), span)
+					}
+					if m, ok := getHistogram(r.httpClientResponseSize, labelValues(span, r.attrHTTPClientResponseSize), "http_client_response_size"); ok {
+						r.observeHistogram(m, float64(span.ResponseBodyLength()), span)
+					}
 				}
 			}
 		case request.EventTypeGRPC:
 			if r.is.GRPCEnabled() {
-				r.observeHistogram(r.grpcDuration.WithLabelValues(labelValues(span, r.attrGRPCDuration)...).Metric, duration, span)
+				if m, ok := getHistogram(r.grpcDuration, labelValues(span, r.attrGRPCDuration), "grpc_duration"); ok {
+					r.observeHistogram(m, duration, span)
+				}
 			}
 		case request.EventTypeGRPCClient:
 			if r.is.GRPCEnabled() {
-				r.observeHistogram(r.grpcClientDuration.WithLabelValues(labelValues(span, r.attrGRPCClientDuration)...).Metric, duration, span)
+				if m, ok := getHistogram(r.grpcClientDuration, labelValues(span, r.attrGRPCClientDuration), "grpc_client_duration"); ok {
+					r.observeHistogram(m, duration, span)
+				}
 			}
 		case request.EventTypeRedisClient, request.EventTypeSQLClient, request.EventTypeRedisServer, request.EventTypeMongoClient, request.EventTypeCouchbaseClient, request.EventTypeMemcachedClient, request.EventTypeMemcachedServer:
 			if r.is.DBEnabled() {
-				r.observeHistogram(r.dbClientDuration.WithLabelValues(labelValues(span, r.attrDBClientDuration)...).Metric, duration, span)
+				if m, ok := getHistogram(r.dbClientDuration, labelValues(span, r.attrDBClientDuration), "db_client_duration"); ok {
+					r.observeHistogram(m, duration, span)
+				}
 			}
 		case request.EventTypeKafkaClient, request.EventTypeKafkaServer:
 			if r.is.KafkaEnabled() {
 				switch span.Method {
 				case request.MessagingPublish:
-					r.observeHistogram(r.msgPublishDuration.WithLabelValues(labelValues(span, r.attrMsgPublishDuration)...).Metric, duration, span)
+					if m, ok := getHistogram(r.msgPublishDuration, labelValues(span, r.attrMsgPublishDuration), "msg_publish_duration"); ok {
+						r.observeHistogram(m, duration, span)
+					}
 				case request.MessagingProcess:
-					r.observeHistogram(r.msgProcessDuration.WithLabelValues(labelValues(span, r.attrMsgProcessDuration)...).Metric, duration, span)
+					if m, ok := getHistogram(r.msgProcessDuration, labelValues(span, r.attrMsgProcessDuration), "msg_process_duration"); ok {
+						r.observeHistogram(m, duration, span)
+					}
 				}
 			}
 		case request.EventTypeMQTTClient, request.EventTypeMQTTServer:
 			if r.is.MQTTEnabled() {
 				switch span.Method {
 				case request.MessagingPublish:
-					r.observeHistogram(r.msgPublishDuration.WithLabelValues(labelValues(span, r.attrMsgPublishDuration)...).Metric, duration, span)
+					if m, ok := getHistogram(r.msgPublishDuration, labelValues(span, r.attrMsgPublishDuration), "msg_publish_duration"); ok {
+						r.observeHistogram(m, duration, span)
+					}
 				case request.MessagingProcess:
-					r.observeHistogram(r.msgProcessDuration.WithLabelValues(labelValues(span, r.attrMsgProcessDuration)...).Metric, duration, span)
+					if m, ok := getHistogram(r.msgProcessDuration, labelValues(span, r.attrMsgProcessDuration), "msg_process_duration"); ok {
+						r.observeHistogram(m, duration, span)
+					}
 				}
 			}
 		case request.EventTypeGPUCudaKernelLaunch:
 			if r.is.GPUEnabled() {
-				r.addCounter(r.cudaKernelCallsTotal.WithLabelValues(labelValues(span, r.attrCudaKernelCalls)...).Metric, 1, span)
-				r.observeHistogram(r.cudaKernelGridSize.WithLabelValues(labelValues(span, r.attrCudaKernelGridSize)...).Metric, float64(span.ContentLength), span)
-				r.observeHistogram(r.cudaKernelBlockSize.WithLabelValues(labelValues(span, r.attrCudaKernelBlockSize)...).Metric, float64(span.SubType), span)
+				if m, ok := getCounter(r.cudaKernelCallsTotal, labelValues(span, r.attrCudaKernelCalls), "cuda_kernel_calls_total"); ok {
+					r.addCounter(m, 1, span)
+				}
+				if m, ok := getHistogram(r.cudaKernelGridSize, labelValues(span, r.attrCudaKernelGridSize), "cuda_kernel_grid_size"); ok {
+					r.observeHistogram(m, float64(span.ContentLength), span)
+				}
+				if m, ok := getHistogram(r.cudaKernelBlockSize, labelValues(span, r.attrCudaKernelBlockSize), "cuda_kernel_block_size"); ok {
+					r.observeHistogram(m, float64(span.SubType), span)
+				}
 			}
 		case request.EventTypeGPUCudaGraphLaunch:
 			if r.is.GPUEnabled() {
-				r.addCounter(r.cudaGraphCallsTotal.WithLabelValues(labelValues(span, r.attrCudaKernelCalls)...).Metric, 1, span)
+				if m, ok := getCounter(r.cudaGraphCallsTotal, labelValues(span, r.attrCudaKernelCalls), "cuda_graph_calls_total"); ok {
+					r.addCounter(m, 1, span)
+				}
 			}
 		case request.EventTypeGPUCudaMalloc:
 			if r.is.GPUEnabled() {
-				r.addCounter(r.cudaMemoryAllocsTotal.WithLabelValues(labelValues(span, r.attrCudaMemoryAllocs)...).Metric, float64(span.ContentLength), span)
+				if m, ok := getCounter(r.cudaMemoryAllocsTotal, labelValues(span, r.attrCudaMemoryAllocs), "cuda_memory_allocs_total"); ok {
+					r.addCounter(m, float64(span.ContentLength), span)
+				}
 			}
 		case request.EventTypeGPUCudaMemcpy:
 			if r.is.GPUEnabled() {
-				r.observeHistogram(r.cudaMemoryCopySize.WithLabelValues(labelValues(span, r.attrCudaMemoryCopies)...).Metric, float64(span.ContentLength), span)
+				if m, ok := getHistogram(r.cudaMemoryCopySize, labelValues(span, r.attrCudaMemoryCopies), "cuda_memory_copy_size"); ok {
+					r.observeHistogram(m, float64(span.ContentLength), span)
+				}
 			}
 		case request.EventTypeDNS:
 			if r.is.DNSEnabled() {
-				r.observeHistogram(r.dnsLookupDuration.WithLabelValues(labelValues(span, r.attrDNSLookupDuration)...).Metric, duration, span)
+				if m, ok := getHistogram(r.dnsLookupDuration, labelValues(span, r.attrDNSLookupDuration), "dns_lookup_duration"); ok {
+					r.observeHistogram(m, duration, span)
+				}
 			}
 		}
 	}
@@ -1069,14 +1127,22 @@ func (r *metricsReporter) observe(span *request.Span) {
 	if r.otelSpanMetricsObserved(span) {
 		if span.Service.Features.SpanMetrics() {
 			lv := r.labelValuesSpans(span)
-			r.observeHistogram(r.spanMetricsLatency.WithLabelValues(lv...).Metric, duration, span)
-			r.addCounter(r.spanMetricsCallsTotal.WithLabelValues(lv...).Metric, 1, span)
-		}
+				if m, ok := getHistogram(r.spanMetricsLatency, lv, "span_metrics_latency"); ok {
+					r.observeHistogram(m, duration, span)
+				}
+				if m, ok := getCounter(r.spanMetricsCallsTotal, lv, "span_metrics_calls_total"); ok {
+					r.addCounter(m, 1, span)
+				}
+			}
 
 		if span.Service.Features.SpanSizes() {
 			lv := r.labelValuesSpans(span)
-			r.addCounter(r.spanMetricsRequestSizeTotal.WithLabelValues(lv...).Metric, float64(span.RequestBodyLength()), span)
-			r.addCounter(r.spanMetricsResponseSizeTotal.WithLabelValues(lv...).Metric, float64(span.ResponseBodyLength()), span)
+			if m, ok := getCounter(r.spanMetricsRequestSizeTotal, lv, "span_metrics_request_size_total"); ok {
+				r.addCounter(m, float64(span.RequestBodyLength()), span)
+			}
+			if m, ok := getCounter(r.spanMetricsResponseSizeTotal, lv, "span_metrics_response_size_total"); ok {
+				r.addCounter(m, float64(span.ResponseBodyLength()), span)
+			}
 		}
 
 		if span.Service.Features.ServiceGraph() {
@@ -1084,23 +1150,57 @@ func (r *metricsReporter) observe(span *request.Span) {
 				lvg := labelValuesSvcGraph(span, r.attrSvcGraph, &r.pidsTracker)
 
 				if span.IsClientSpan() {
-					r.observeHistogram(r.serviceGraphClient.WithLabelValues(lvg...).Metric, duration, span)
+					if m, ok := getHistogram(r.serviceGraphClient, lvg, "service_graph_client"); ok {
+						r.observeHistogram(m, 1, span)
+					}
 					// If we managed to resolve the remote name only, we check to see
 					// we are not instrumenting the server service, then and only then,
 					// we generate client span count for service graph total
 					if otel.ClientSpanToUninstrumentedService(&r.pidsTracker, span) {
-						r.addCounter(r.serviceGraphTotal.WithLabelValues(lvg...).Metric, 1, span)
+						if m, ok := getCounter(r.serviceGraphTotal, lvg, "service_graph_total"); ok {
+							r.addCounter(m, 1, span)
+						}
 					}
 				} else {
-					r.observeHistogram(r.serviceGraphServer.WithLabelValues(lvg...).Metric, duration, span)
-					r.addCounter(r.serviceGraphTotal.WithLabelValues(lvg...).Metric, 1, span)
+					if m, ok := getHistogram(r.serviceGraphServer, lvg, "service_graph_server"); ok {
+						r.observeHistogram(m, duration, span)
+					}
+					if m, ok := getCounter(r.serviceGraphTotal, lvg, "service_graph_total"); ok {
+						r.addCounter(m, 1, span)
+					}
 				}
 				if request.SpanStatusCode(span) == request.StatusCodeError {
-					r.addCounter(r.serviceGraphFailed.WithLabelValues(lvg...).Metric, 1, span)
+					if m, ok := getCounter(r.serviceGraphFailed, lvg, "service_graph_failed"); ok {
+						r.addCounter(m, 1, span)
+					}
 				}
 			}
 		}
 	}
+}
+
+func getHistogram(exp *Expirer[prometheus.Histogram], labels []string, metricName string) (prometheus.Histogram, bool) {
+	if exp == nil {
+		return nil, false
+	}
+	entry, err := exp.WithLabelValues(labels...)
+	if err != nil {
+		slog.With("component", "prom.MetricsReporter").With("metric", metricName).With("error", err).Error("failed to get metric by label values")
+		return nil, false
+	}
+	return entry.Metric, true
+}
+
+func getCounter(exp *Expirer[prometheus.Counter], labels []string, metricName string) (prometheus.Counter, bool) {
+	if exp == nil {
+		return nil, false
+	}
+	entry, err := exp.WithLabelValues(labels...)
+	if err != nil {
+		slog.With("component", "prom.MetricsReporter").With("metric", metricName).With("error", err).Error("failed to get metric by label values")
+		return nil, false
+	}
+	return entry.Metric, true
 }
 
 func appendK8sLabelNames(names []string) []string {

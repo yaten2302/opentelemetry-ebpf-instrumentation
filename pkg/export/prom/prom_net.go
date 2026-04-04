@@ -158,14 +158,22 @@ func (r *netMetricsReporter) observeFlowBytes(flow *ebpf.Record) {
 	if r.flowBytes == nil {
 		return
 	}
-	r.flowBytes.WithLabelValues(labelValues(flow, r.flowAttrs)...).
-		Metric.Add(float64(flow.Metrics.Bytes))
+	entry, err := r.flowBytes.WithLabelValues(labelValues(flow, r.flowAttrs)...)
+	if err != nil {
+		slog.With("component", "prom.NetReporter").With("error", err).Error("failed to get flow bytes metric by label values")
+		return
+	}
+	entry.Metric.Add(float64(flow.Metrics.Bytes))
 }
 
 func (r *netMetricsReporter) observeInterZone(flow *ebpf.Record) {
 	if r.interZone == nil || flow.CommonAttrs.SrcZone == flow.CommonAttrs.DstZone {
 		return
 	}
-	r.interZone.WithLabelValues(labelValues(flow, r.interZoneAttrs)...).
-		Metric.Add(float64(flow.Metrics.Bytes))
+	entry, err := r.interZone.WithLabelValues(labelValues(flow, r.interZoneAttrs)...)
+	if err != nil {
+		slog.With("component", "prom.NetReporter").With("error", err).Error("failed to get inter-zone metric by label values")
+		return
+	}
+	entry.Metric.Add(float64(flow.Metrics.Bytes))
 }

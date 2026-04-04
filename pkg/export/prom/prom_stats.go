@@ -144,6 +144,10 @@ func (r *statMetricsReporter) observeTCPRtt(stat *ebpf.Stat) {
 	if r.tcpRtt == nil || stat.TCPRtt == nil {
 		return
 	}
-	r.tcpRtt.WithLabelValues(labelValues(stat, r.statsAttrs)...).
-		Metric.Observe(float64(stat.TCPRtt.SrttUs) / 1_000_000.0)
+	entry, err := r.tcpRtt.WithLabelValues(labelValues(stat, r.statsAttrs)...)
+	if err != nil {
+		slog.With("component", "prom.StatsReporter").With("error", err).Error("failed to get TCP RTT metric by label values")
+		return
+	}
+	entry.Metric.Observe(float64(stat.TCPRtt.SrttUs) / 1_000_000.0)
 }
